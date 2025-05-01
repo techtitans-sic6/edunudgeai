@@ -12,6 +12,8 @@ from PIL import Image
 import cv2
 import google.generativeai as genai
 from deepface import DeepFace
+from PIL import Image
+from io import BytesIO
 import re
 
 # ========== INISIALISASI STATE ==========
