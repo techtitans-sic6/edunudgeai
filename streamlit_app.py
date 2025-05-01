@@ -12,8 +12,6 @@ from PIL import Image
 import cv2
 import google.generativeai as genai
 from deepface import DeepFace
-from PIL import Image
-from io import BytesIO
 import re
 
 # ========== INISIALISASI STATE ==========
@@ -323,17 +321,26 @@ def fetch_latest_image(server_url):
         response = requests.get(f"{server_url}/api/camera/latest", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            filename = os.path.basename(data['path'])
-            filepath = os.path.abspath(os.path.join("static", "uploads", filename))
-            return filepath, data.get('timestamp', '')
+            if data.get('image_data'):
+                # Decode base64 ke image numpy array
+                img_data = base64.b64decode(data['image_data'])
+                img_np = np.frombuffer(img_data, np.uint8)
+                img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                return img, data.get('timestamp', '')
+        return None, None
     except Exception as e:
         st.sidebar.error(f"Koneksi ke server gagal: {str(e)}")
-    return None, None
+        return None, None
 
-def analyze_faces(img_path, detection_model, min_confidence):
+def analyze_faces(img_np, detection_model, min_confidence):
     try:
+        # Simpan gambar ke buffer memori
+        is_success, buffer = cv2.imencode(".jpg", cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
+        io_buf = io.BytesIO(buffer)
+        
         results = DeepFace.analyze(
-            img_path,
+            io_buf,
             actions=["emotion", "age", "gender"],
             detector_backend=detection_model,
             enforce_detection=False
@@ -357,7 +364,7 @@ def analyze_faces(img_path, detection_model, min_confidence):
         return [r for r in results if r.get("face_confidence", 1) > min_confidence]
     except Exception as e:
         st.sidebar.warning(f"Gagal menganalisis gambar: {str(e)}")
-        return []
+        return 
 
 def visualize_detection(img_np, results):
     img_bboxes = img_np.copy()
@@ -482,73 +489,64 @@ with tab2:
     st.markdown("## 🎭 Monitoring Emosi Siswa")
     st.caption("Realtime monitoring ekspresi wajah menggunakan ESP32-CAM dan DeepFace")
 
-    img_path, timestamp = fetch_latest_image(SERVER_URL)
+    img_np, timestamp = fetch_latest_image(SERVER_URL)
 
-    if img_path:
-        retries = 3
-        while not os.path.exists(img_path) and retries > 0:
-            time.sleep(0.5)
-            retries -= 1
-
-        if os.path.exists(img_path):
-            img = Image.open(img_path)
-            img_np = np.array(img)
-
-            # ===== Dua Kolom Tampilan =====
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.subheader("📷 Gambar Terkini")
+    if img_np is not None:
+        # ===== Dua Kolom Tampilan =====
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("📷 Gambar Terkini")
             
-            col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-            with col1:
+        with col1:
+            st.markdown('<div class="image-container">', unsafe_allow_html=True)
+            st.image(img_np, caption=f"Gambar Terkini - {timestamp}", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.spinner("🔍 Menganalisis wajah..."):
+            results = analyze_faces(img_np, detection_model, min_confidence)
+
+        if results:
+            # Visualisasi deteksi wajah yang lebih baik
+            img_bboxes = visualize_detection(img_np.copy(), results)
+
+            with col2:
                 st.markdown('<div class="image-container">', unsafe_allow_html=True)
-                st.image(img_np, caption=f"Gambar Terkini - {timestamp}", use_container_width=True)
+                st.image(img_bboxes, caption="Deteksi Wajah dengan Anotasi", use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            with st.spinner("🔍 Menganalisis wajah..."):
-                results = analyze_faces(img_path, detection_model, min_confidence)
+            st.success(f"✅ {len(results)} wajah siswa terdeteksi!")
+            
+            # Simpan data emosi untuk rekomendasi
+            st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
+        st.markdown('</div>', unsafe_allow_html=True)  # Close card
 
-            if results:
-                # Visualisasi deteksi wajah yang lebih baik
-                img_bboxes = visualize_detection(img_np, results)
-
-                with col2:
-                    st.markdown('<div class="image-container">', unsafe_allow_html=True)
-                    st.image(img_bboxes, caption="Deteksi Wajah dengan Anotasi", use_container_width=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                st.success(f"✅ {len(results)} wajah siswa terdeteksi!")
+        if results:
+            # ===== Detail Per Wajah =====
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("👥 Detail Emosi Siswa")
                 
-                # Simpan data emosi untuk rekomendasi
-                st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
-            st.markdown('</div>', unsafe_allow_html=True)  # Close card
-
-            if results:
-                # ===== Detail Per Wajah =====
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                st.subheader("👥 Detail Emosi Siswa")
-                
-                # Responsive grid layout
-                cols_per_row = 3
-                for i in range(0, len(results), cols_per_row):
-                    cols = st.columns(cols_per_row)
-                    for j in range(cols_per_row):
-                        if i + j < len(results):
-                            result = results[i + j]
-                            with cols[j]:
-                                with st.container():
-                                    st.markdown(f"**Wajah #{i + j + 1}**")
+            # Responsive grid layout
+            cols_per_row = 3
+            for i in range(0, len(results), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j < len(results):
+                        result = results[i + j]
+                        with cols[j]:
+                            with st.container():
+                                st.markdown(f"**Wajah #{i + j + 1}**")
                                     
-                                    region = result["region"]
-                                    x, y, w, h = region["x"], region["y"], region["w"], region["h"]
-                                    face_crop = img.crop((x, y, x+w, y+h))
+                                region = result["region"]
+                                x, y, w, h = region["x"], region["y"], region["w"], region["h"]
+                                face_crop = img.crop((x, y, x+w, y+h))
                                     
-                                    col_face, col_info = st.columns([1, 2])
-                                    with col_face:
-                                        st.image(face_crop, use_container_width=True, output_format="PNG")
+                                col_face, col_info = st.columns([1, 2])
+                                with col_face:
+                                    st.image(face_crop, use_container_width=True, output_format="PNG")
                                     
-                                    with col_info:
-                                        st.markdown(f"""
+                                with col_info:
+                                    st.markdown(f"""
                                             <div style="font-size: 0.9rem; line-height: 1.5;">
                                                 <div>😊 <b>Emosi:</b> {result['dominant_emotion'].capitalize()}</div>
                                                 <div>🎂 <b>Usia:</b> {result['age']:.0f} tahun</div>
