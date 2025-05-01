@@ -30,11 +30,6 @@ Sistem kelas pintar berbasis **ESP32 dan AI** untuk memantau lingkungan dan eksp
 - ESP32/ESP32-CAM → Flask API (MongoDB + Uploads) ↓ Streamlit UI (Realtime + AI Insight)
 -----------------------------------
 
-📁 Struktur Folder
-
-├── esp32.py # Source ESP32 (sensor) ├── esp32cam.ino # Source ESP32-CAM ├── flask_app.py # Flask REST API + MongoDB ├── streamlit_app.py # Dashboard interface ├── static/uploads # Folder penyimpanan gambar ├── config.json # Konfigurasi API/MQTT ├── wifi_config.json # Konfigurasi WiFi ESP32
------------------------------------
-
 ⚙️ Cara Menjalankan
 
 1. Jalankan Flask API
