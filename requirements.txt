@@ -13,3 +13,4 @@ matplotlib
 pillow
 google-generativeai
 deepface
+tf-keras
