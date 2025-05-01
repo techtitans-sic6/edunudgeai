@@ -1,0 +1,15 @@
+flask
+flask-cors
+flask-limiter
+pymongo
+opencv-python
+numpy
+streamlit
+streamlit-autorefresh
+requests
+pandas
+plotly
+matplotlib
+pillow
+google-generativeai
+deepface
