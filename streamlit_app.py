@@ -336,21 +336,31 @@ def fetch_latest_image(server_url):
 
 def analyze_faces(img_np, detection_model, min_confidence):
     try:
-        # Konversi ke format yang kompatibel dengan DeepFace
-        img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+        # Pastikan img_np adalah numpy array dengan format yang benar
+        if not isinstance(img_np, np.ndarray):
+            raise ValueError("Input harus berupa numpy array")
+            
+        # Konversi ke RGB jika perlu
+        if len(img_np.shape) == 3 and img_np.shape[2] == 3:  # Sudah 3 channel
+            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+        else:
+            img_rgb = img_np
+            
+        # Simpan ke file temporer di memori
+        temp_file = io.BytesIO()
+        Image.fromarray(img_rgb).save(temp_file, format='JPEG')
+        temp_file.seek(0)
         
-        # Simpan ke buffer in-memory
-        _, buffer = cv2.imencode(".jpg", img_rgb)
-        io_buf = io.BytesIO(buffer)
-        
+        # Analisis dengan DeepFace
         results = DeepFace.analyze(
-            io_buf,
+            img_path=temp_file,  # Gunakan file temporer
             actions=["emotion", "age", "gender"],
             detector_backend=detection_model,
             enforce_detection=False,
-            silent=True  # Nonaktifkan logging internal DeepFace
+            silent=True
         )
         
+        # Proses hasil
         if isinstance(results, dict):
             results = [results]
 
@@ -364,26 +374,24 @@ def analyze_faces(img_np, detection_model, min_confidence):
             h = region.get("h", region.get("height", 0))
             
             # Validasi ukuran wajah
-            if w < 30 or h < 30:  # Skip wajah terlalu kecil
+            if w < 30 or h < 30:
                 continue
                 
-            # Update result
             result["region"] = {"x": x, "y": y, "w": w, "h": h}
             
-            # Proses gender jika ada
+            # Proses gender
             if isinstance(result.get("gender"), dict):
                 dominant_gender = max(result["gender"].items(), key=lambda x: x[1])[0]
                 result["dominant_gender"] = dominant_gender
                 result["gender_percent"] = result["gender"][dominant_gender]
             
-            # Filter berdasarkan confidence
             if result.get("face_confidence", 1) > min_confidence:
                 processed_results.append(result)
-        
+                
         return processed_results
         
     except Exception as e:
-        st.sidebar.error(f"Error analisis wajah: {str(e)}")
+        st.error(f"Error dalam analisis wajah: {str(e)}")
         return []
 
 def visualize_detection(img_np, results):
