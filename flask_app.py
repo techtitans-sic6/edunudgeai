@@ -250,7 +250,6 @@ def get_latest_image():
         if not files:
             return jsonify({"status": "error", "message": "No images found"}), 404
         
-        # Dapatkan file terbaru berdasarkan timestamp nama file
         latest_file = max(files)
         filepath = os.path.join(UPLOAD_FOLDER, latest_file)
         
