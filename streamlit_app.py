@@ -433,7 +433,7 @@ with st.sidebar:
             st.stop()
 
     st.title("⚙️ Konfigurasi")
-    SERVER_URL = st.text_input("URL API Server", "http://localhost:5001")
+    SERVER_URL = st.text_input("URL API Server", "https://edunudgeai.mantigamedan.sch.id")
     REFRESH_INTERVAL = st.slider("Interval Refresh (detik)", 5, 60, 30)
     
     st.markdown("### 🎯 Nilai Ideal Sensor")
