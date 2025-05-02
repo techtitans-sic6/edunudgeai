@@ -336,60 +336,59 @@ def fetch_latest_image(server_url):
 
 def analyze_faces(img_np, detection_model, min_confidence):
     try:
-        # Pastikan img_np adalah numpy array dengan format yang benar
+        # Pastikan input adalah numpy array yang valid
         if not isinstance(img_np, np.ndarray):
             raise ValueError("Input harus berupa numpy array")
-            
-        # Konversi ke RGB jika perlu
-        if len(img_np.shape) == 3 and img_np.shape[2] == 3:  # Sudah 3 channel
-            img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
-        else:
-            img_rgb = img_np
-            
-        # Simpan ke file temporer di memori
-        temp_file = io.BytesIO()
-        Image.fromarray(img_rgb).save(temp_file, format='JPEG')
-        temp_file.seek(0)
         
-        # Analisis dengan DeepFace
-        results = DeepFace.analyze(
-            img_path=temp_file,  # Gunakan file temporer
-            actions=["emotion", "age", "gender"],
-            detector_backend=detection_model,
-            enforce_detection=False,
-            silent=True
-        )
+        # Buat file temporer fisik (DeepFace lebih stabil dengan file fisik)
+        temp_file = "temp_face.jpg"
+        cv2.imwrite(temp_file, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
         
-        # Proses hasil
-        if isinstance(results, dict):
-            results = [results]
+        try:
+            # Analisis dengan DeepFace menggunakan path file
+            results = DeepFace.analyze(
+                img_path=temp_file,
+                actions=["emotion", "age", "gender"],
+                detector_backend=detection_model,
+                enforce_detection=False,
+                silent=True
+            )
+            
+            # Proses hasil
+            if isinstance(results, dict):
+                results = [results]
 
-        processed_results = []
-        for result in results:
-            # Normalisasi region
-            region = result.get("region", {})
-            x = region.get("x", region.get("left", 0))
-            y = region.get("y", region.get("top", 0))
-            w = region.get("w", region.get("width", 0))
-            h = region.get("h", region.get("height", 0))
-            
-            # Validasi ukuran wajah
-            if w < 30 or h < 30:
-                continue
+            processed_results = []
+            for result in results:
+                # Normalisasi region
+                region = result.get("region", {})
+                x = region.get("x", region.get("left", 0))
+                y = region.get("y", region.get("top", 0))
+                w = region.get("w", region.get("width", 0))
+                h = region.get("h", region.get("height", 0))
                 
-            result["region"] = {"x": x, "y": y, "w": w, "h": h}
-            
-            # Proses gender
-            if isinstance(result.get("gender"), dict):
-                dominant_gender = max(result["gender"].items(), key=lambda x: x[1])[0]
-                result["dominant_gender"] = dominant_gender
-                result["gender_percent"] = result["gender"][dominant_gender]
-            
-            if result.get("face_confidence", 1) > min_confidence:
-                processed_results.append(result)
+                # Validasi ukuran wajah
+                if w < 30 or h < 30:
+                    continue
+                    
+                result["region"] = {"x": x, "y": y, "w": w, "h": h}
                 
-        return processed_results
-        
+                # Proses gender
+                if isinstance(result.get("gender"), dict):
+                    dominant_gender = max(result["gender"].items(), key=lambda x: x[1])[0]
+                    result["dominant_gender"] = dominant_gender
+                    result["gender_percent"] = result["gender"][dominant_gender]
+                
+                if result.get("face_confidence", 1) > min_confidence:
+                    processed_results.append(result)
+                    
+            return processed_results
+            
+        finally:
+            # Pastikan file temporer dihapus
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                
     except Exception as e:
         st.error(f"Error dalam analisis wajah: {str(e)}")
         return []
@@ -523,36 +522,46 @@ with tab2:
         
         # Analisis wajah
         with st.spinner("🔍 Menganalisis wajah..."):
-            results = analyze_faces(img_np, detection_model, min_confidence)
-            
-            if results:
-                # Visualisasi hasil
-                img_bboxes = visualize_detection(img_np.copy(), results)
-                st.image(img_bboxes, caption="Hasil Deteksi Wajah", use_container_width=True)
+            try:
+                results = analyze_faces(img_np, detection_model, min_confidence)
                 
-                # Tampilkan statistik
-                st.success(f"Deteksi berhasil: {len(results)} wajah")
-                
-                # Tampilkan detail per wajah
-                for i, result in enumerate(results):
-                    with st.expander(f"Wajah {i+1}"):
-                        col1, col2 = st.columns([1, 2])
-                        
-                        # Crop wajah
-                        region = result["region"]
-                        face_crop = img_np[region['y']:region['y']+region['h'], 
-                                          region['x']:region['x']+region['w']]
-                        
-                        with col1:
-                            st.image(face_crop, use_container_width=True)
+                if results:
+                    # Visualisasi hasil
+                    img_bboxes = visualize_detection(img_np.copy(), results)
+                    st.image(img_bboxes, caption="Hasil Deteksi Wajah", use_container_width=True)
+                    
+                    # Tampilkan statistik
+                    st.success(f"Deteksi berhasil: {len(results)} wajah")
+                    
+                    # Simpan emosi untuk rekomendasi
+                    st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
+                    
+                    # Tampilkan detail per wajah
+                    for i, result in enumerate(results):
+                        with st.expander(f"Wajah {i+1} - {result['dominant_emotion'].capitalize()}"):
+                            col1, col2 = st.columns([1, 2])
                             
-                        with col2:
-                            st.write(f"**Emosi:** {result['dominant_emotion'].capitalize()}")
-                            st.write(f"**Usia:** {result['age']:.1f} tahun")
-                            st.write(f"**Gender:** {result.get('dominant_gender', 'Tidak terdeteksi')}")
-                            st.write(f"**Confidence:** {result.get('face_confidence', 0)*100:.1f}%")
-            else:
-                st.warning("Tidak ada wajah yang terdeteksi")
+                            # Crop wajah
+                            region = result["region"]
+                            face_crop = img_np[region['y']:region['y']+region['h'], 
+                                          region['x']:region['x']+region['w']]
+                            
+                            with col1:
+                                st.image(face_crop, use_container_width=True)
+                                
+                            with col2:
+                                st.markdown(f"""
+                                **Emosi:** {result['dominant_emotion'].capitalize()}  
+                                **Usia:** {result['age']:.1f} tahun  
+                                **Gender:** {result.get('dominant_gender', 'Tidak terdeteksi')}  
+                                **Confidence:** {result.get('face_confidence', 0)*100:.1f}%
+                                """)
+                else:
+                    st.warning("Tidak ada wajah yang terdeteksi")
+                    st.session_state.current_emotions = []
+                    
+            except Exception as e:
+                st.error(f"Terjadi kesalahan dalam pemrosesan wajah: {str(e)}")
     else:
         st.warning("Belum ada gambar yang diterima dari server")
 
