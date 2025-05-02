@@ -514,162 +514,47 @@ with tab1:
 
 with tab2:
     st.markdown("## 🎭 Monitoring Emosi Siswa")
-    st.caption("Realtime monitoring ekspresi wajah menggunakan ESP32-CAM dan DeepFace")
-
+    
     img_np, timestamp = fetch_latest_image(SERVER_URL)
-
+    
     if img_np is not None:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+        # Tampilkan gambar asli
+        st.image(img_np, caption=f"Gambar Terkini - {timestamp}", use_container_width=True)
         
-        # Container untuk gambar utama
-        with st.container():
-            col1, col2 = st.columns(2)
+        # Analisis wajah
+        with st.spinner("🔍 Menganalisis wajah..."):
+            results = analyze_faces(img_np, detection_model, min_confidence)
             
-            # Gambar asli
-            with col1:
-                st.image(
-                    img_np, 
-                    caption=f"Gambar Terkini - {timestamp}", 
-                    use_container_width=True,
-                    channels="BGR"  # Sesuaikan dengan format warna
-                )
-
-            # Analisis wajah
-            with st.spinner("🔍 Menganalisis wajah..."):
-                results = analyze_faces(img_np, detection_model, min_confidence)
-            
-            # Gambar dengan bounding box
             if results:
+                # Visualisasi hasil
                 img_bboxes = visualize_detection(img_np.copy(), results)
-                with col2:
-                    st.image(
-                        img_bboxes, 
-                        caption="Deteksi Wajah dengan Anotasi", 
-                        use_container_width=True,
-                        channels="BGR"
-                    )
+                st.image(img_bboxes, caption="Hasil Deteksi Wajah", use_container_width=True)
                 
-                st.success(f"✅ {len(results)} wajah siswa terdeteksi!")
-                st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
+                # Tampilkan statistik
+                st.success(f"Deteksi berhasil: {len(results)} wajah")
                 
-                # ===== Detail Per Wajah =====
-                st.subheader("👥 Detail Emosi Siswa")
-                
-                # CSS untuk kartu wajah
-                st.markdown("""
-                <style>
-                .face-card {
-                    border: 1px solid #e2e8f0;
-                    border-radius: 10px;
-                    padding: 1rem;
-                    margin-bottom: 1rem;
-                    background-color: white;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                }
-                .face-grid {
-                    display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-                    gap: 1rem;
-                }
-                </style>
-                """, unsafe_allow_html=True)
-                
-                # Grid responsif untuk wajah
-                st.markdown('<div class="face-grid">', unsafe_allow_html=True)
+                # Tampilkan detail per wajah
                 for i, result in enumerate(results):
-                    with st.container():
-                        st.markdown('<div class="face-card">', unsafe_allow_html=True)
+                    with st.expander(f"Wajah {i+1}"):
+                        col1, col2 = st.columns([1, 2])
                         
                         # Crop wajah
                         region = result["region"]
-                        x, y, w, h = region["x"], region["y"], region["w"], region["h"]
-                        face_crop = img_np[y:y+h, x:x+w]
+                        face_crop = img_np[region['y']:region['y']+region['h'], 
+                                          region['x']:region['x']+region['w']]
                         
-                        col_face, col_info = st.columns([1, 2])
-                        with col_face:
-                            st.image(
-                                face_crop, 
-                                use_container_width=True,
-                                caption=f"Wajah {i+1}",
-                                channels="BGR"
-                            )
-                        
-                        with col_info:
-                            st.markdown(f"""
-                                <div style="font-size: 0.9rem; line-height: 1.5;">
-                                    <div>😊 <b>Emosi:</b> {result['dominant_emotion'].capitalize()}</div>
-                                    <div>🎂 <b>Usia:</b> {result['age']:.0f} tahun</div>
-                                    <div>🚻 <b>Gender:</b> {result.get('dominant_gender', 'N/A')}</div>
-                                    <div>📊 <b>Confidence:</b> {result.get('face_confidence', 1)*100:.1f}%</div>
-                                </div>
-                            """, unsafe_allow_html=True)
-                        
-                        st.markdown('</div>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # ===== Statistik Kelas =====
-                st.subheader("📊 Statistik Kelas")
-                
-                # Tab untuk statistik
-                tab_stat, tab_hist = st.tabs(["Statistik", "Riwayat"])
-                
-                with tab_stat:
-                    # Container untuk metrik
-                    with st.container():
-                        col_met1, col_met2 = st.columns(2)
-                        
-                        with col_met1:
-                            # Distribusi Emosi
-                            emotion_counts = pd.Series([r["dominant_emotion"] for r in results]).value_counts()
-                            fig_emo = px.pie(
-                                names=emotion_counts.index,
-                                values=emotion_counts.values,
-                                title="Distribusi Emosi"
-                            )
-                            st.plotly_chart(fig_emo, use_container_width=True)
-                        
-                        with col_met2:
-                            # Distribusi Gender
-                            gender_data = [r.get("dominant_gender", "unknown") for r in results]
-                            gender_counts = pd.Series(gender_data).value_counts()
+                        with col1:
+                            st.image(face_crop, use_container_width=True)
                             
-                            if len(gender_counts) > 0:
-                                fig_gen = px.bar(
-                                    x=gender_counts.index,
-                                    y=gender_counts.values,
-                                    labels={"x": "Gender", "y": "Jumlah"},
-                                    title="Distribusi Gender"
-                                )
-                                st.plotly_chart(fig_gen, use_container_width=True)
-                            else:
-                                st.warning("Data gender tidak tersedia")
-                
-                with tab_hist:
-                    # Riwayat emosi
-                    st.session_state.history.append({
-                        "timestamp": datetime.now().strftime("%H:%M:%S"),
-                        "total_students": len(results),
-                        "emotions": [r["dominant_emotion"] for r in results],
-                        "avg_age": np.mean([r["age"] for r in results])
-                    })
-                    
-                    hist_df = pd.DataFrame(st.session_state.history)
-                    st.dataframe(
-                        hist_df,
-                        column_config={
-                            "timestamp": "Waktu",
-                            "total_students": "Jumlah Siswa",
-                            "avg_age": "Usia Rata-rata"
-                        },
-                        use_container_width=True
-                    )
-            
+                        with col2:
+                            st.write(f"**Emosi:** {result['dominant_emotion'].capitalize()}")
+                            st.write(f"**Usia:** {result['age']:.1f} tahun")
+                            st.write(f"**Gender:** {result.get('dominant_gender', 'Tidak terdeteksi')}")
+                            st.write(f"**Confidence:** {result.get('face_confidence', 0)*100:.1f}%")
             else:
-                st.warning("Tidak ada wajah yang terdeteksi dengan confidence yang memadai")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.warning("Tidak ada wajah yang terdeteksi")
     else:
-        st.warning("⚠️ Belum ada gambar tersedia dari server Flask")
+        st.warning("Belum ada gambar yang diterima dari server")
 
 with tab3:
     st.markdown("## 🧠 Rekomendasi untuk Kelas")
