@@ -10,7 +10,6 @@ import numpy as np
 import logging
 from logging.handlers import RotatingFileHandler
 import shutil
-import base64
 
 # ========== KONFIGURASI APLIKASI ==========
 app = Flask(__name__)
@@ -250,17 +249,16 @@ def get_latest_image():
         if not files:
             return jsonify({"status": "error", "message": "No images found"}), 404
         
+        # Dapatkan file terbaru berdasarkan timestamp nama file
         latest_file = max(files)
         filepath = os.path.join(UPLOAD_FOLDER, latest_file)
-        
-        # Baca gambar sebagai base64
-        with open(filepath, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
         
         return jsonify({
             "status": "success",
             "filename": latest_file,
-            "image_data": encoded_string,
+            "path": filepath,
+            "url": f"/{filepath}",
+            "size": f"{os.path.getsize(filepath) / 1024:.2f}KB",
             "timestamp": latest_file.split('_')[1].split('.')[0]
         }), 200
         
