@@ -13,8 +13,6 @@ import cv2
 import google.generativeai as genai
 from deepface import DeepFace
 import re
-import base64
-import io
 
 # ========== INISIALISASI STATE ==========
 if "generating_recommendations" not in st.session_state:
@@ -323,74 +321,40 @@ def fetch_latest_image(server_url):
         response = requests.get(f"{server_url}/api/camera/latest", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            if data.get('image_data'):
-                img_data = base64.b64decode(data['image_data'])
-                img_np = np.frombuffer(img_data, np.uint8)
-                img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                return img, data.get('timestamp', '')
-        return None, None
+            filename = os.path.basename(data['path'])
+            filepath = os.path.abspath(os.path.join("static", "uploads", filename))
+            return filepath, data.get('timestamp', '')
     except Exception as e:
         st.sidebar.error(f"Koneksi ke server gagal: {str(e)}")
-        return None, None
+    return None, None
 
-def analyze_faces(img_np, detection_model, min_confidence):
+def analyze_faces(img_path, detection_model, min_confidence):
     try:
-        # Pastikan input adalah numpy array yang valid
-        if not isinstance(img_np, np.ndarray):
-            raise ValueError("Input harus berupa numpy array")
-        
-        # Buat file temporer fisik (DeepFace lebih stabil dengan file fisik)
-        temp_file = "temp_face.jpg"
-        cv2.imwrite(temp_file, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
-        
-        try:
-            # Analisis dengan DeepFace menggunakan path file
-            results = DeepFace.analyze(
-                img_path=temp_file,
-                actions=["emotion", "age", "gender"],
-                detector_backend=detection_model,
-                enforce_detection=False,
-                silent=True
-            )
-            
-            # Proses hasil
-            if isinstance(results, dict):
-                results = [results]
+        results = DeepFace.analyze(
+            img_path,
+            actions=["emotion", "age", "gender"],
+            detector_backend=detection_model,
+            enforce_detection=False
+        )
+        if isinstance(results, dict):
+            results = [results]
 
-            processed_results = []
-            for result in results:
-                # Normalisasi region
-                region = result.get("region", {})
-                x = region.get("x", region.get("left", 0))
-                y = region.get("y", region.get("top", 0))
-                w = region.get("w", region.get("width", 0))
-                h = region.get("h", region.get("height", 0))
-                
-                # Validasi ukuran wajah
-                if w < 30 or h < 30:
-                    continue
-                    
-                result["region"] = {"x": x, "y": y, "w": w, "h": h}
-                
-                # Proses gender
-                if isinstance(result.get("gender"), dict):
-                    dominant_gender = max(result["gender"].items(), key=lambda x: x[1])[0]
-                    result["dominant_gender"] = dominant_gender
-                    result["gender_percent"] = result["gender"][dominant_gender]
-                
-                if result.get("face_confidence", 1) > min_confidence:
-                    processed_results.append(result)
-                    
-            return processed_results
-            
-        finally:
-            # Pastikan file temporer dihapus
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-                
+        for result in results:
+            region = result.get("region", {})
+            region.setdefault("x", region.get("left", 0))
+            region.setdefault("y", region.get("top", 0))
+            region.setdefault("w", region.get("width", region.get("right", 0) - region.get("x", 0)))
+            region.setdefault("h", region.get("height", region.get("bottom", 0) - region.get("y", 0)))
+            result["region"] = region
+
+            if isinstance(result.get("gender"), dict):
+                dominant_gender = max(result["gender"].items(), key=lambda x: x[1])[0]
+                result["dominant_gender"] = dominant_gender
+                result["gender_percent"] = result["gender"][dominant_gender]
+
+        return [r for r in results if r.get("face_confidence", 1) > min_confidence]
     except Exception as e:
-        st.error(f"Error dalam analisis wajah: {str(e)}")
+        st.sidebar.warning(f"Gagal menganalisis gambar: {str(e)}")
         return []
 
 def visualize_detection(img_np, results):
@@ -458,7 +422,7 @@ with st.sidebar:
             st.stop()
 
     st.title("⚙️ Konfigurasi")
-    SERVER_URL = st.text_input("URL API Server", "https://edunudgeai.mantigamedan.sch.id")
+    SERVER_URL = st.text_input("URL API Server", "http://localhost:5001")
     REFRESH_INTERVAL = st.slider("Interval Refresh (detik)", 5, 60, 30)
     
     st.markdown("### 🎯 Nilai Ideal Sensor")
@@ -512,58 +476,159 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
+    # ===== DATA KAMERA =====
     st.markdown("## 🎭 Monitoring Emosi Siswa")
-    
-    img_np, timestamp = fetch_latest_image(SERVER_URL)
-    
-    if img_np is not None:
-        # Tampilkan gambar asli
-        st.image(img_np, caption=f"Gambar Terkini - {timestamp}", use_container_width=True)
-        
-        # Analisis wajah
-        with st.spinner("🔍 Menganalisis wajah..."):
-            try:
-                results = analyze_faces(img_np, detection_model, min_confidence)
+    st.caption("Realtime monitoring ekspresi wajah menggunakan ESP32-CAM dan DeepFace")
+
+    img_path, timestamp = fetch_latest_image(SERVER_URL)
+
+    if img_path:
+        retries = 3
+        while not os.path.exists(img_path) and retries > 0:
+            time.sleep(0.5)
+            retries -= 1
+
+        if os.path.exists(img_path):
+            img = Image.open(img_path)
+            img_np = np.array(img)
+
+            # ===== Dua Kolom Tampilan =====
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("📷 Gambar Terkini")
+            
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown('<div class="image-container">', unsafe_allow_html=True)
+                st.image(img_np, caption=f"Gambar Terkini - {timestamp}", use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with st.spinner("🔍 Menganalisis wajah..."):
+                results = analyze_faces(img_path, detection_model, min_confidence)
+
+            if results:
+                # Visualisasi deteksi wajah yang lebih baik
+                img_bboxes = visualize_detection(img_np, results)
+
+                with col2:
+                    st.markdown('<div class="image-container">', unsafe_allow_html=True)
+                    st.image(img_bboxes, caption="Deteksi Wajah dengan Anotasi", use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                st.success(f"✅ {len(results)} wajah siswa terdeteksi!")
                 
-                if results:
-                    # Visualisasi hasil
-                    img_bboxes = visualize_detection(img_np.copy(), results)
-                    st.image(img_bboxes, caption="Hasil Deteksi Wajah", use_container_width=True)
+                # Simpan data emosi untuk rekomendasi
+                st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
+            st.markdown('</div>', unsafe_allow_html=True)  # Close card
+
+            if results:
+                # ===== Detail Per Wajah =====
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.subheader("👥 Detail Emosi Siswa")
+                
+                # Responsive grid layout
+                cols_per_row = 3
+                for i in range(0, len(results), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j in range(cols_per_row):
+                        if i + j < len(results):
+                            result = results[i + j]
+                            with cols[j]:
+                                with st.container():
+                                    st.markdown(f"**Wajah #{i + j + 1}**")
+                                    
+                                    region = result["region"]
+                                    x, y, w, h = region["x"], region["y"], region["w"], region["h"]
+                                    face_crop = img.crop((x, y, x+w, y+h))
+                                    
+                                    col_face, col_info = st.columns([1, 2])
+                                    with col_face:
+                                        st.image(face_crop, use_container_width=True, output_format="PNG")
+                                    
+                                    with col_info:
+                                        st.markdown(f"""
+                                            <div style="font-size: 0.9rem; line-height: 1.5;">
+                                                <div>😊 <b>Emosi:</b> {result['dominant_emotion'].capitalize()}</div>
+                                                <div>🎂 <b>Usia:</b> {result['age']:.0f} tahun</div>
+                                                <div>🚻 <b>Gender:</b> {result.get('dominant_gender', 'N/A')}</div>
+                                                <div>📊 <b>Confidence:</b> {result.get('face_confidence', 1)*100:.1f}%</div>
+                                            </div>
+                                        """, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)  # Close card
+
+                # ===== Statistik Kelas =====
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.subheader("📊 Statistik Kelas")
+                
+                emotion_counts = pd.Series([r["dominant_emotion"] for r in results]).value_counts()
+                avg_age = np.mean([r["age"] for r in results])
+                gender_list = [r.get("dominant_gender") for r in results if r.get("dominant_gender")]
+                gender_dist = pd.Series(gender_list).value_counts()
+
+                st.session_state.history.append({
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "total_students": len(results),
+                    "emotions": [r["dominant_emotion"] for r in results],
+                    "gender_distribution": gender_list,
+                    "avg_age": avg_age
+                })
+
+                hist_df = pd.DataFrame(st.session_state.history)
+
+                tab4, tab5, tab6 = st.tabs(["Distribusi Emosi", "Demografi", "Riwayat"])
+
+                with tab4:
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        pastel_colors = plt.cm.Pastel1.colors
+                        fig1, ax1 = plt.subplots(figsize=(6, 6))
+                        wedges, texts, autotexts = ax1.pie(
+                            emotion_counts,
+                            labels=emotion_counts.index,
+                            autopct="%1.1f%%",
+                            startangle=90,
+                            colors=pastel_colors,
+                            textprops={'fontsize': 8}
+                        )
+                        ax1.axis('equal')
+                        st.pyplot(fig1)
                     
-                    # Tampilkan statistik
-                    st.success(f"Deteksi berhasil: {len(results)} wajah")
+                    with col2:
+                        st.bar_chart(emotion_counts, color="#3b82f6", height=300)
+
+                with tab5:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                        st.metric("Rata-rata Usia", f"{avg_age:.1f} tahun")
+                        st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Simpan emosi untuk rekomendasi
-                    st.session_state.current_emotions = [r["dominant_emotion"] for r in results]
-                    
-                    # Tampilkan detail per wajah
-                    for i, result in enumerate(results):
-                        with st.expander(f"Wajah {i+1} - {result['dominant_emotion'].capitalize()}"):
-                            col1, col2 = st.columns([1, 2])
-                            
-                            # Crop wajah
-                            region = result["region"]
-                            face_crop = img_np[region['y']:region['y']+region['h'], 
-                                          region['x']:region['x']+region['w']]
-                            
-                            with col1:
-                                st.image(face_crop, use_container_width=True)
-                                
-                            with col2:
-                                st.markdown(f"""
-                                **Emosi:** {result['dominant_emotion'].capitalize()}  
-                                **Usia:** {result['age']:.1f} tahun  
-                                **Gender:** {result.get('dominant_gender', 'Tidak terdeteksi')}  
-                                **Confidence:** {result.get('face_confidence', 0)*100:.1f}%
-                                """)
-                else:
-                    st.warning("Tidak ada wajah yang terdeteksi")
-                    st.session_state.current_emotions = []
-                    
-            except Exception as e:
-                st.error(f"Terjadi kesalahan dalam pemrosesan wajah: {str(e)}")
+                    with col2:
+                        if not gender_dist.empty:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.metric("Distribusi Gender", f"{len(gender_list)} siswa")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            st.bar_chart(gender_dist, color="#10b981", height=200)
+                        else:
+                            st.warning("Data gender tidak tersedia")
+
+                with tab6:
+                    st.dataframe(
+                        hist_df.tail(10),
+                        column_config={
+                            "timestamp": "Waktu",
+                            "total_students": "Jumlah Siswa",
+                            "avg_age": "Usia Rata-rata"
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                st.markdown('</div>', unsafe_allow_html=True)  # Close card
+
+        else:
+            st.warning("❌ Gambar belum tersedia.")
     else:
-        st.warning("Belum ada gambar yang diterima dari server")
+        st.warning("⚠️ Belum ada gambar tersedia dari server Flask.")
 
 with tab3:
     st.markdown("## 🧠 Rekomendasi untuk Kelas")
